@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { Task, CreateTaskRequest, PaginatedTasksResponse } from '../types/task';
+import { useState, useEffect } from 'react';
+import { Task, CreateTaskRequest, PaginatedTasksResponse, TaskStatus } from '../types/task';
+import './TaskList.css';
 
-const API_BASE_URL = 'http://localhost:5000';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:5000';
 
 interface TaskListProps {
   clientId: string;
@@ -16,55 +17,56 @@ export default function TaskList({ clientId }: TaskListProps) {
   const [submitting, setSubmitting] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  
-  const observer = useRef<IntersectionObserver>();
-  const lastTaskRef = useCallback((node: HTMLLIElement) => {
-    if (loading) return;
-    if (observer.current) observer.current.disconnect();
-    
-    observer.current = new IntersectionObserver(entries => {
-      if (entries[0].isIntersecting && hasMore) {
-        loadMoreTasks();
-      }
-    });
-    
-    if (node) observer.current.observe(node);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, hasMore]);
+  const [statusFilter, setStatusFilter] = useState<TaskStatus | 'all'>('all');
 
-  const fetchTasks = async (nextCursor?: string | null) => {
+  // Fetch tasks with pagination and optional status filter
+  const fetchTasks = async (nextCursor?: string | null, status?: TaskStatus | 'all') => {
     setLoading(true);
     setError(null);
     try {
       const url = new URL(`${API_BASE_URL}/api/tasks`);
       url.searchParams.append('client_id', clientId);
-      url.searchParams.append('limit', '20');
+      url.searchParams.append('limit', '10');
       if (nextCursor) url.searchParams.append('cursor', nextCursor);
+      if (status && status !== 'all') url.searchParams.append('status', status);
 
       const res = await fetch(url.toString());
       if (!res.ok) throw new Error('Failed to fetch tasks');
-      
+
       const data: PaginatedTasksResponse = await res.json();
-      
-      setTasks(prev => nextCursor ? [...prev, ...data.items] : data.items);
+
+      // Append when paginating; replace when fetching fresh
+      setTasks(prev => (nextCursor ? [...prev, ...data.items] : data.items));
       setCursor(data.nextCursor || null);
       setHasMore(data.hasMore);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
+      setHasMore(false);
     } finally {
       setLoading(false);
     }
   };
 
   const loadMoreTasks = () => {
-    if (cursor) fetchTasks(cursor);
+    if (cursor && hasMore && !loading) {
+      fetchTasks(cursor, statusFilter);
+    }
+  };
+
+  const handleFilterChange = (newStatus: TaskStatus | 'all') => {
+    setStatusFilter(newStatus);
+    setCursor(null);
+    setHasMore(true);
+    setTasks([]);
+    fetchTasks(null, newStatus);
   };
 
   useEffect(() => {
-    fetchTasks();
+    fetchTasks(null, statusFilter);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientId]);
 
+  // Create task with optimistic UI update; rollback on error
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmedTitle = title.trim();
@@ -111,8 +113,10 @@ export default function TaskList({ clientId }: TaskListProps) {
       }
 
       const created: Task = await res.json();
+      // Replace optimistic task with server version
       setTasks(prev => prev.map(t => t.id === tempId ? created : t));
     } catch (err) {
+      // Rollback optimistic task on failure
       setTasks(prev => prev.filter(t => t.id !== tempId));
       setError(err instanceof Error ? err.message : 'Failed to create task');
     } finally {
@@ -121,125 +125,136 @@ export default function TaskList({ clientId }: TaskListProps) {
   };
 
   return (
-    <div>
-      <h2>Tasks for Client</h2>
-      <p style={{ color: '#666', fontSize: '14px' }}>Client ID: {clientId}</p>
+    <div className="task-list-container">
+      <h2 className="task-list-title">Tasks</h2>
 
       {error && (
-        <div style={{ 
-          color: '#c33', 
-          background: '#fee', 
-          padding: '12px', 
-          marginBottom: '16px', 
-          borderRadius: '4px',
-          border: '1px solid #fcc'
-        }}>
-          {error}
+        <div className="error-banner">
+          Error: {error}
         </div>
       )}
 
-      <form onSubmit={handleSubmit} style={{ 
-        marginBottom: '24px', 
-        padding: '20px', 
-        background: '#f9f9f9', 
-        borderRadius: '8px' 
-      }}>
-        <h3 style={{ marginTop: 0 }}>Add New Task</h3>
-        <div style={{ marginBottom: '12px' }}>
+      <form onSubmit={handleSubmit} className="create-task-form">
+        <h3 className="form-title">Create New Task</h3>
+        <div className="form-group">
+          <label className="form-label">
+            Title <span className="form-required">*</span>
+          </label>
           <input
             type="text"
             value={title}
             onChange={e => setTitle(e.target.value)}
-            placeholder="Task title *"
+            placeholder="Enter task title"
             required
             disabled={submitting}
-            style={{ 
-              width: '100%', 
-              padding: '10px', 
-              fontSize: '16px', 
-              border: '1px solid #ddd', 
-              borderRadius: '4px',
-              boxSizing: 'border-box'
-            }}
+            className="form-input"
           />
         </div>
-        <div style={{ marginBottom: '12px' }}>
+        <div className="form-group">
+          <label className="form-label">Description</label>
           <textarea
             value={description}
             onChange={e => setDescription(e.target.value)}
-            placeholder="Description (optional)"
+            placeholder="Enter task description (optional)"
             disabled={submitting}
             rows={3}
-            style={{ 
-              width: '100%', 
-              padding: '10px', 
-              fontSize: '16px', 
-              border: '1px solid #ddd', 
-              borderRadius: '4px',
-              boxSizing: 'border-box',
-              fontFamily: 'inherit'
-            }}
+            className="form-textarea"
           />
         </div>
-        <button 
-          type="submit" 
-          disabled={submitting || !title.trim()}
-          style={{ 
-            padding: '10px 24px', 
-            fontSize: '16px', 
-            background: submitting ? '#ccc' : '#007bff', 
-            color: 'white', 
-            border: 'none', 
-            borderRadius: '4px', 
-            cursor: submitting ? 'not-allowed' : 'pointer' 
-          }}
-        >
-          {submitting ? 'Adding...' : 'Add Task'}
+        <button type="submit" disabled={submitting || !title.trim()} className="submit-button">
+          {submitting ? 'Creating...' : 'Create Task'}
         </button>
       </form>
 
-      {loading && tasks.length === 0 && <p>Loading tasks...</p>}
-
-      {tasks.length === 0 && !loading ? (
-        <p style={{ textAlign: 'center', color: '#999', padding: '40px' }}>
-          No tasks yet. Add one above!
-        </p>
-      ) : (
-        <ul style={{ listStyle: 'none', padding: 0 }}>
-          {tasks.map((task, index) => (
-            <li 
-              key={task.id}
-              ref={index === tasks.length - 1 ? lastTaskRef : null}
-              style={{ 
-                padding: '16px', 
-                marginBottom: '12px', 
-                background: 'white', 
-                border: '1px solid #ddd', 
-                borderRadius: '8px',
-                opacity: task.id.startsWith('temp-') ? 0.6 : 1,
-                transition: 'opacity 0.2s'
-              }}
+      <div className="filter-container">
+        <h3 className="task-count">
+          {tasks.length} {tasks.length === 1 ? 'task' : 'tasks'}
+        </h3>
+        
+        <div className="filter-controls">
+          <label className="filter-label">Filter:</label>
+          <div className="filter-buttons">
+            <button
+              onClick={() => handleFilterChange('all')}
+              disabled={loading}
+              className={`filter-button ${statusFilter === 'all' ? 'active-all' : ''}`}
             >
-              <h3 style={{ margin: '0 0 8px 0', fontSize: '18px' }}>
-                {task.title}
-              </h3>
-              {task.description && (
-                <p style={{ margin: '8px 0', color: '#555', fontSize: '14px' }}>
-                  {task.description}
-                </p>
-              )}
-              <div style={{ fontSize: '12px', color: '#999', marginTop: '8px' }}>
-                <span>Status: {task.status}</span>
-                <span style={{ margin: '0 8px' }}>•</span>
-                <span>Created: {new Date(task.createdAt).toLocaleDateString()}</span>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+              All
+            </button>
+            <button
+              onClick={() => handleFilterChange('todo')}
+              disabled={loading}
+              className={`filter-button ${statusFilter === 'todo' ? 'active-todo' : ''}`}
+            >
+              Todo
+            </button>
+            <button
+              onClick={() => handleFilterChange('done')}
+              disabled={loading}
+              className={`filter-button ${statusFilter === 'done' ? 'active-done' : ''}`}
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      </div>
 
-      {loading && tasks.length > 0 && (
-        <p style={{ textAlign: 'center', color: '#666' }}>Loading more tasks...</p>
+      {loading && tasks.length === 0 ? (
+        <div className="loading-state">
+          <p>Loading tasks...</p>
+        </div>
+      ) : tasks.length === 0 ? (
+        <div className="empty-state">
+          <p className="empty-state-text">
+            {statusFilter === 'all' 
+              ? 'No tasks yet. Create your first task above!' 
+              : `No ${statusFilter} tasks found.`}
+          </p>
+        </div>
+      ) : (
+        <>
+          <ul className="task-list">
+            {tasks.map((task) => (
+              <li 
+                key={task.id}
+                className={`task-item ${task.id.startsWith('temp-') ? 'optimistic' : ''}`}
+              >
+                <div className="task-header">
+                  <h3 className="task-title">{task.title}</h3>
+                  <span className={`task-status-badge ${task.status}`}>
+                    {task.status === 'done' ? 'Done' : 'Todo'}
+                  </span>
+                </div>
+                {task.description && (
+                  <p className="task-description">{task.description}</p>
+                )}
+                <div className="task-footer">
+                  Created {new Date(task.createdAt).toLocaleDateString('en-US', { 
+                    month: 'short', 
+                    day: 'numeric', 
+                    year: 'numeric' 
+                  })}
+                </div>
+              </li>
+            ))}
+          </ul>
+
+          {hasMore && (
+            <div className="load-more-container">
+              <button
+                onClick={loadMoreTasks}
+                disabled={loading}
+                className="load-more-button"
+              >
+                {loading ? 'Loading...' : 'Load More'}
+              </button>
+            </div>
+          )}
+
+          {!hasMore && (
+            <p className="end-of-list">End of list</p>
+          )}
+        </>
       )}
     </div>
   );
